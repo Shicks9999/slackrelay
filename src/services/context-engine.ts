@@ -43,9 +43,28 @@ export interface MessagingContext {
   }[];
 }
 
+export interface KnowledgeContext {
+  chunks: {
+    content: string;
+    documentId: string;
+    similarity: number;
+  }[];
+}
+
+export interface HistoricalContext {
+  examples: {
+    title: string;
+    plainText: string;
+    score: number;
+    engine: string;
+  }[];
+}
+
 export interface AssembledContext {
   campaign: CampaignContext;
   messaging: MessagingContext | null;
+  knowledge: KnowledgeContext | null;
+  history: HistoricalContext | null;
   formatted: string;
   meta: {
     totalTokens: number;
@@ -57,8 +76,8 @@ export interface AssembledContext {
 const DEFAULT_MAX_TOKENS = 4000;
 
 /**
- * Context Engine v1: Assembles campaign + messaging context.
- * Knowledge retrieval and historical examples will be added in v2/v3.
+ * Context Engine v3: Assembles campaign + messaging + knowledge + historical examples.
+ * Includes token budget management with priority-based truncation.
  */
 export async function assembleContext(
   request: ContextRequest
@@ -167,10 +186,92 @@ export async function assembleContext(
     sources.push("messaging");
   }
 
-  // Step 3: Format context into a prompt-ready string
+  // Step 3: Load relevant knowledge chunks (if available)
+  let knowledgeContext: KnowledgeContext | null = null;
+
+  try {
+    // Get team_id from campaign
+    const { data: campaignRow } = await supabase
+      .from("campaigns")
+      .select("team_id")
+      .eq("id", request.campaignId)
+      .single();
+
+    if (campaignRow?.team_id) {
+      const { searchKnowledge } = await import("@/services/knowledge");
+      const results = await searchKnowledge(
+        campaignRow.team_id,
+        request.userPrompt,
+        3,
+        0.7
+      );
+
+      if (results.length > 0) {
+        knowledgeContext = {
+          chunks: results.map((r) => ({
+            content: r.content,
+            documentId: r.documentId,
+            similarity: r.similarity,
+          })),
+        };
+        sources.push("knowledge");
+      }
+    }
+  } catch {
+    // Knowledge retrieval is optional — don't fail the whole context assembly
+  }
+
+  // Step 4: Load high-scoring historical examples from same campaign/engine
+  let historyContext: HistoricalContext | null = null;
+
+  try {
+    const { data: pastContent } = await supabase
+      .from("content_items")
+      .select("id, title, plain_text, engine")
+      .eq("campaign_id", request.campaignId)
+      .eq("engine", request.engine)
+      .eq("status", "approved")
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    if (pastContent && pastContent.length > 0) {
+      // Load scores for these items and pick the top-scoring ones
+      const contentIds = pastContent.map((c) => c.id);
+      const { data: scores } = await supabase
+        .from("content_scores")
+        .select("content_id, overall")
+        .in("content_id", contentIds)
+        .gte("overall", 7)
+        .order("overall", { ascending: false })
+        .limit(2);
+
+      if (scores && scores.length > 0) {
+        const scoreMap = new Map(scores.map((s) => [s.content_id, s.overall]));
+        const examples = pastContent
+          .filter((c) => scoreMap.has(c.id))
+          .map((c) => ({
+            title: c.title,
+            plainText: (c.plain_text ?? "").slice(0, 500),
+            score: scoreMap.get(c.id)!,
+            engine: c.engine,
+          }));
+
+        if (examples.length > 0) {
+          historyContext = { examples };
+          sources.push("history");
+        }
+      }
+    }
+  } catch {
+    // Historical context is optional
+  }
+
+  // Step 5: Format context into a prompt-ready string
   const formatted = formatContext(
     campaignContext,
     messagingContext,
+    knowledgeContext,
+    historyContext,
     request,
     maxTokens
   );
@@ -181,6 +282,8 @@ export async function assembleContext(
   return {
     campaign: campaignContext,
     messaging: messagingContext,
+    knowledge: knowledgeContext,
+    history: historyContext,
     formatted: formatted.text,
     meta: {
       totalTokens,
@@ -193,6 +296,8 @@ export async function assembleContext(
 function formatContext(
   campaign: CampaignContext,
   messaging: MessagingContext | null,
+  knowledge: KnowledgeContext | null,
+  history: HistoricalContext | null,
   request: ContextRequest,
   maxTokens: number
 ): { text: string; truncated: boolean } {
@@ -259,6 +364,27 @@ function formatContext(
         if (vp.differentiator)
           sections.push(`    Differentiator: ${vp.differentiator}`);
       }
+    }
+  }
+
+  // Historical examples (priority 6)
+  if (history && history.examples.length > 0) {
+    sections.push("");
+    sections.push("HIGH-PERFORMING EXAMPLES (use as reference for tone and quality):");
+    for (const example of history.examples) {
+      sections.push(`---`);
+      sections.push(`Title: ${example.title} (Score: ${example.score}/10)`);
+      sections.push(example.plainText);
+    }
+  }
+
+  // Knowledge context (priority 7)
+  if (knowledge && knowledge.chunks.length > 0) {
+    sections.push("");
+    sections.push("RELEVANT KNOWLEDGE:");
+    for (const chunk of knowledge.chunks) {
+      sections.push(`---`);
+      sections.push(chunk.content);
     }
   }
 

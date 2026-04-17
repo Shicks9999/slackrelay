@@ -16,13 +16,16 @@ export default async function AppLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const skipAuth = process.env.NEXT_PUBLIC_SKIP_AUTH === "true";
 
-  if (!user) {
-    redirect("/login");
+  let user: { email?: string } | null = null;
+  if (!skipAuth) {
+    const supabase = await createClient();
+    const { data } = await supabase.auth.getUser();
+    user = data.user;
+    if (!user) {
+      redirect("/login");
+    }
   }
 
   return (
@@ -47,7 +50,7 @@ export default async function AppLayout({
         </nav>
         <div className="border-t border-zinc-200 p-3 dark:border-zinc-800">
           <p className="truncate px-3 text-xs text-zinc-500">
-            {user.email}
+            {user?.email ?? "MVP Tester"}
           </p>
         </div>
       </aside>

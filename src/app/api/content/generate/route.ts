@@ -7,12 +7,15 @@ import type { EngineType } from "@/types/engine";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
+  const skipAuth = process.env.NEXT_PUBLIC_SKIP_AUTH === "true";
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  let userId = "mvp-tester";
+  if (!skipAuth) {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    userId = user.id;
   }
 
   const body = await request.json();
@@ -68,7 +71,7 @@ export async function POST(request: Request) {
       .from("content_items")
       .insert({
         campaign_id: campaignId,
-        created_by: user.id,
+        created_by: userId,
         engine: engineType,
         title: output.title,
         body: output.body,

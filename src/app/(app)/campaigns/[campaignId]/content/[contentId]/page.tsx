@@ -1,7 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ScoreButton } from "@/components/content/score-button";
+import { CommentThread } from "@/components/collaboration/comment-thread";
+import { ApprovalPanel } from "@/components/collaboration/approval-panel";
 
 interface Props {
   params: Promise<{ campaignId: string; contentId: string }>;
@@ -17,7 +20,8 @@ const ENGINE_LABELS: Record<string, string> = {
 
 export default async function ContentDetailPage({ params }: Props) {
   const { campaignId, contentId } = await params;
-  const supabase = await createClient();
+  const skipAuth = process.env.NEXT_PUBLIC_SKIP_AUTH === "true";
+  const supabase = skipAuth ? createAdminClient() : await createClient();
 
   const { data: content, error } = await supabase
     .from("content_items")
@@ -36,24 +40,42 @@ export default async function ContentDetailPage({ params }: Props) {
     .eq("content_id", contentId)
     .single();
 
-  interface SlackBody {
+  // Union of all engine body shapes
+  interface ContentBody {
+    // Common
     headline?: string;
     body?: string;
+    cta?: string | { text: string; url: string };
+    // Slack Launch
     bulletPoints?: string[];
-    cta?: string;
     threadFollowUp?: string;
     channelVariants?: { channel: string; message: string }[];
-  }
-  interface LinkedInBody {
+    // LinkedIn Growth
     hook?: string;
-    body?: string;
-    cta?: string;
     hashtags?: string[];
     commentPrompt?: string;
     variants?: { angle: string; post: string }[];
+    // Product Marketing
+    subheadline?: string;
+    valueProps?: { title: string; description: string }[];
+    featureHighlights?: { feature: string; benefit: string }[];
+    socialProof?: string;
+    competitivePositioning?: string;
+    // Email Campaign
+    subject?: string;
+    preheader?: string;
+    greeting?: string;
+    signoff?: string;
+    // Sales Enablement
+    title?: string;
+    talkingPoints?: { point: string; supporting: string }[];
+    objectionHandling?: { objection: string; response: string }[];
+    customerQuestions?: { question: string; answer: string }[];
+    competitiveInsights?: string[];
+    closingStatement?: string;
   }
-  const body = content.body as SlackBody & LinkedInBody;
-  const isLinkedIn = content.engine === "linkedin_growth";
+  const body = content.body as ContentBody;
+  const engineType = content.engine as string;
 
   return (
     <div className="space-y-6">
@@ -88,15 +110,34 @@ export default async function ContentDetailPage({ params }: Props) {
 
       {/* Content Body */}
       <div className="rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
-        {/* Hook / Headline */}
-        {(body.headline || body.hook) && (
-          <h2 className="text-lg font-bold">{body.headline ?? body.hook}</h2>
+        {/* Hook / Headline / Subject */}
+        {(body.headline || body.hook || body.subject) && (
+          <h2 className="text-lg font-bold">
+            {body.headline ?? body.hook ?? body.subject}
+          </h2>
         )}
 
+        {/* Email: Preheader + Greeting */}
+        {engineType === "email_campaign" && body.preheader && (
+          <p className="mt-1 text-sm text-zinc-500">{body.preheader}</p>
+        )}
+        {engineType === "email_campaign" && body.greeting && (
+          <p className="mt-3 text-sm">{body.greeting}</p>
+        )}
+
+        {/* Product Marketing: Subheadline */}
+        {body.subheadline && (
+          <p className="mt-1 text-base text-zinc-600 dark:text-zinc-400">
+            {body.subheadline}
+          </p>
+        )}
+
+        {/* Main body text */}
         {body.body && (
           <div className="mt-3 whitespace-pre-wrap text-sm">{body.body}</div>
         )}
 
+        {/* Slack: Bullet points */}
         {body.bulletPoints && body.bulletPoints.length > 0 && (
           <ul className="mt-3 list-disc space-y-1 pl-5 text-sm">
             {body.bulletPoints.map((bp, i) => (
@@ -105,14 +146,123 @@ export default async function ContentDetailPage({ params }: Props) {
           </ul>
         )}
 
+        {/* Product Marketing: Value Props */}
+        {body.valueProps && body.valueProps.length > 0 && (
+          <div className="mt-4 space-y-3">
+            <h3 className="text-sm font-semibold">Value Propositions</h3>
+            {body.valueProps.map((vp, i) => (
+              <div key={i} className="rounded border border-zinc-200 p-3 dark:border-zinc-800">
+                <span className="text-sm font-medium">{vp.title}</span>
+                <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{vp.description}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Product Marketing: Feature Highlights */}
+        {body.featureHighlights && body.featureHighlights.length > 0 && (
+          <div className="mt-4 space-y-2">
+            <h3 className="text-sm font-semibold">Feature Highlights</h3>
+            {body.featureHighlights.map((fh, i) => (
+              <div key={i} className="text-sm">
+                <span className="font-medium">{fh.feature}</span>
+                <span className="text-zinc-500"> — {fh.benefit}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Sales: Talking Points */}
+        {body.talkingPoints && body.talkingPoints.length > 0 && (
+          <div className="mt-4 space-y-3">
+            <h3 className="text-sm font-semibold">Talking Points</h3>
+            {body.talkingPoints.map((tp, i) => (
+              <div key={i} className="rounded border border-zinc-200 p-3 dark:border-zinc-800">
+                <p className="text-sm font-medium">{tp.point}</p>
+                <p className="mt-1 text-sm text-zinc-500">{tp.supporting}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Sales: Objection Handling */}
+        {body.objectionHandling && body.objectionHandling.length > 0 && (
+          <div className="mt-4 space-y-3">
+            <h3 className="text-sm font-semibold">Objection Handling</h3>
+            {body.objectionHandling.map((oh, i) => (
+              <div key={i} className="rounded border border-zinc-200 p-3 dark:border-zinc-800">
+                <p className="text-sm font-medium text-red-600 dark:text-red-400">
+                  &quot;{oh.objection}&quot;
+                </p>
+                <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{oh.response}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Sales: Discovery Questions */}
+        {body.customerQuestions && body.customerQuestions.length > 0 && (
+          <div className="mt-4 space-y-2">
+            <h3 className="text-sm font-semibold">Discovery Questions</h3>
+            {body.customerQuestions.map((cq, i) => (
+              <div key={i} className="text-sm">
+                <span className="font-medium">{cq.question}</span>
+                <p className="text-zinc-500">{cq.answer}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Sales: Competitive Insights */}
+        {body.competitiveInsights && body.competitiveInsights.length > 0 && (
+          <div className="mt-4">
+            <h3 className="text-sm font-semibold">Competitive Insights</h3>
+            <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-zinc-600 dark:text-zinc-400">
+              {body.competitiveInsights.map((ci, i) => (
+                <li key={i}>{ci}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* CTA — handles string and {text, url} object */}
         {body.cta && (
           <div className="mt-4 rounded bg-zinc-50 p-3 text-sm font-medium dark:bg-zinc-900">
-            CTA: {body.cta}
+            {typeof body.cta === "string" ? (
+              <>CTA: {body.cta}</>
+            ) : (
+              <>CTA: {body.cta.text} → {body.cta.url}</>
+            )}
+          </div>
+        )}
+
+        {/* Product Marketing: Social Proof + Competitive Positioning */}
+        {body.socialProof && (
+          <div className="mt-3 border-l-2 border-green-300 pl-3 text-sm italic text-zinc-600 dark:border-green-700 dark:text-zinc-400">
+            {body.socialProof}
+          </div>
+        )}
+        {body.competitivePositioning && (
+          <p className="mt-3 text-sm text-zinc-500">{body.competitivePositioning}</p>
+        )}
+
+        {/* Email: Signoff */}
+        {body.signoff && (
+          <div className="mt-4 whitespace-pre-wrap text-sm text-zinc-600 dark:text-zinc-400">
+            {body.signoff}
+          </div>
+        )}
+
+        {/* Sales: Closing Statement */}
+        {body.closingStatement && (
+          <div className="mt-4 rounded bg-zinc-50 p-3 text-sm dark:bg-zinc-900">
+            <span className="text-xs font-medium uppercase text-zinc-400">Closing</span>
+            <p className="mt-1">{body.closingStatement}</p>
           </div>
         )}
 
         {/* LinkedIn: Hashtags */}
-        {isLinkedIn && body.hashtags && body.hashtags.length > 0 && (
+        {body.hashtags && body.hashtags.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
             {body.hashtags.map((tag, i) => (
               <span
@@ -126,7 +276,7 @@ export default async function ContentDetailPage({ params }: Props) {
         )}
 
         {/* LinkedIn: Comment Prompt */}
-        {isLinkedIn && body.commentPrompt && (
+        {body.commentPrompt && (
           <div className="mt-4 border-l-2 border-blue-300 pl-3 text-sm text-zinc-600 dark:border-blue-700 dark:text-zinc-400">
             <span className="text-xs font-medium uppercase text-zinc-400">
               Suggested first comment
@@ -167,20 +317,22 @@ export default async function ContentDetailPage({ params }: Props) {
           </div>
         )}
 
-        {/* LinkedIn: Angle Variants */}
-        {isLinkedIn && body.variants && body.variants.length > 0 && (
+        {/* LinkedIn: Angle Variants / Email: Subject Variants */}
+        {body.variants && body.variants.length > 0 && (
           <div className="mt-6 space-y-3">
-            <h3 className="text-sm font-semibold">Alternate Angles</h3>
+            <h3 className="text-sm font-semibold">
+              {engineType === "linkedin_growth" ? "Alternate Angles" : "Subject Line Variants"}
+            </h3>
             {body.variants.map((variant, i) => (
               <div
                 key={i}
                 className="rounded border border-zinc-200 p-3 dark:border-zinc-800"
               >
                 <span className="text-xs font-medium text-zinc-500">
-                  {variant.angle}
+                  {variant.angle ?? `Variant ${i + 1}`}
                 </span>
                 <p className="mt-1 whitespace-pre-wrap text-sm">
-                  {variant.post}
+                  {variant.post ?? variant.angle}
                 </p>
               </div>
             ))}
@@ -254,6 +406,10 @@ export default async function ContentDetailPage({ params }: Props) {
         </div>
       )}
 
+      {/* Approval + Comments */}
+      <ApprovalSection contentId={contentId} />
+      <CommentsSection contentId={contentId} />
+
       {/* Context Snapshot */}
       {content.context_snapshot && (
         <details className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
@@ -265,6 +421,43 @@ export default async function ContentDetailPage({ params }: Props) {
           </pre>
         </details>
       )}
+    </div>
+  );
+}
+
+async function CommentsSection({ contentId }: { contentId: string }) {
+  const skipAuth = process.env.NEXT_PUBLIC_SKIP_AUTH === "true";
+  const supabase = skipAuth ? createAdminClient() : await createClient();
+
+  const { data: comments } = await supabase
+    .from("content_comments")
+    .select("id, author_name, author_id, body, comment_type, resolved, created_at")
+    .eq("content_id", contentId)
+    .is("parent_comment_id", null)
+    .order("created_at", { ascending: true });
+
+  return (
+    <div className="rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
+      <CommentThread contentId={contentId} comments={comments ?? []} />
+    </div>
+  );
+}
+
+async function ApprovalSection({ contentId }: { contentId: string }) {
+  const skipAuth = process.env.NEXT_PUBLIC_SKIP_AUTH === "true";
+  const supabase = skipAuth ? createAdminClient() : await createClient();
+
+  const { data: approval } = await supabase
+    .from("content_approvals")
+    .select("id, status, requested_by, requested_at, decided_by, decided_at, decision_note")
+    .eq("content_id", contentId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  return (
+    <div className="rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
+      <ApprovalPanel contentId={contentId} approval={approval} />
     </div>
   );
 }
